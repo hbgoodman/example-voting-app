@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, make_response, g
 from redis import Redis
+from statsd import StatsClient  # ADD THIS LINE
 import os
 import socket
 import random
@@ -9,6 +10,9 @@ import logging
 option_a = os.getenv('OPTION_A', "Cats")
 option_b = os.getenv('OPTION_B', "Dogs")
 hostname = socket.gethostname()
+
+# Initialize StatsD client once here
+statsd = StatsClient(host=os.getenv('STATSD_HOST', 'localhost'), port=8125)
 
 app = Flask(__name__)
 
@@ -28,13 +32,15 @@ def hello():
         voter_id = hex(random.getrandbits(64))[2:-1]
 
     vote = None
-
     if request.method == 'POST':
         redis = get_redis()
         vote = request.form['vote']
         app.logger.info('Received vote for %s', vote)
         data = json.dumps({'voter_id': voter_id, 'vote': vote})
         redis.rpush('votes', data)
+        
+        # Increment the Sysdig metric ONLY when a vote is actually cast
+        statsd.incr(f'votes.total,option={vote}')
 
     resp = make_response(render_template(
         'index.html',
@@ -43,9 +49,9 @@ def hello():
         hostname=hostname,
         vote=vote,
     ))
+    
     resp.set_cookie('voter_id', voter_id)
     return resp
-
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=80, debug=True, threaded=True)
